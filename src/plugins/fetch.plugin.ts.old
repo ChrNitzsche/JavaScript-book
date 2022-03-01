@@ -1,0 +1,64 @@
+import axios from 'axios';
+import * as esbuild from 'esbuild-wasm';
+import localForage from 'localforage';
+
+// const clog = true;
+
+const fileCache = localForage.createInstance({
+   name: 'filecache',
+});
+
+export const fetchPlugin = (inputCode: string) => {
+
+   return {
+      name: 'fetch-plugin',
+      setup(build: esbuild.PluginBuild) {
+         
+            build.onLoad({ filter: /.*/ }, async (args: any) => {
+               
+               if (args.path === 'index.js') {
+                  return {
+                     loader: 'jsx',
+                     // import message from 'tiny-test-pkg';   // -> using ES-modules -> receiving a lot of more code
+                     // better, because using the same export-methods, instead of mixing ES-modules und CommonJS-modules:
+                     contents: inputCode
+                  };
+               }
+
+               // Check, if we already fetched the file
+               const cachedResult = await fileCache.getItem<esbuild.OnLoadResult>(args.path);
+               // if file in change -> return immediately
+               if (cachedResult) {
+                  // return cachedResult;
+               }
+
+               const { data, request } = await axios.get(args.path);
+               
+               const fileType = args.path.match(/.css$/) ? 'css' : 'jsx';
+               console.log('File:', fileType);
+
+               let content: string = data;
+               if (fileType === 'css') {
+                  let escaped = data.replace(/\n/g, "")
+                                    .replace(/"/g, '\\"')
+                                    .replace(/'/g, "\\'");
+                  console.log('css: \n', escaped);
+                  content = `const style = document.createElement('style');
+                             style.innerText = '${escaped}';
+                             document.head.appendChild(style);`
+               }
+
+               const result: esbuild.OnLoadResult = {
+                  // loader: args.path.match('/.css$/') ? 'css' : 'jsx',   <- doesn't work because of missing filesystem
+                  loader: 'jsx',
+                  contents: content,
+                  resolveDir: new URL('./', request.responseURL).pathname
+               };
+               // store response in IndexedDB
+               await fileCache.setItem(args.path, result);
+               
+               return result
+            });
+      }
+   }
+}
